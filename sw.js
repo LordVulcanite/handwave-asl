@@ -1,5 +1,5 @@
-const CORE = "handwave-core-v1", BIG = "handwave-mp-v1";
-const ASSETS = ["./", "index.html", "app.js", "features.js", "letters.js", "manifest.webmanifest", "icon.svg", "icon-192.png", "icon-512.png", "apple-touch-icon.png"];
+const CORE = "handwave-core-v2", BIG = "handwave-mp-v1";
+const ASSETS = ["./", "index.html", "app.js", "features.js", "letters.js", "game.js", "manifest.webmanifest", "icon.svg", "icon-192.png", "icon-512.png", "apple-touch-icon.png"];
 self.addEventListener("install", (e) => { e.waitUntil(caches.open(CORE).then((c) => c.addAll(ASSETS)).then(() => self.skipWaiting())); });
 self.addEventListener("activate", (e) => {
   e.waitUntil(caches.keys().then((ks) => Promise.all(ks.filter((k) => k !== CORE && k !== BIG).map((k) => caches.delete(k)))).then(() => self.clients.claim()));

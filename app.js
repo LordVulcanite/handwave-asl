@@ -1,6 +1,6 @@
 (function () {
 "use strict";
-var F = window.ASLFeatures, L = window.ASLLetters;
+var F = window.ASLFeatures, L = window.ASLLetters, G = window.HWGame;
 var $ = function (s, r) { return (r || document).querySelector(s); };
 function el(tag, cls, text) { var n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; }
 function clear(n) { while (n.firstChild) n.removeChild(n.firstChild); }
@@ -25,7 +25,7 @@ var prog = (function () {
   var p = store.get("prog", {}); var learned = {}, res = [];
   if (p && p.learned) LETTERS.forEach(function (ch) { if (p.learned[ch]) learned[ch] = 1; });
   if (p && Array.isArray(p.results)) res = p.results.filter(function (r) { return r && typeof r.ts === "number" && (r.mode === "quiz" || r.mode === "spell"); }).slice(-200);
-  return { learned: learned, results: res };
+  return G.loadProg(p, learned, res);
 })();
 var demo = false;
 function saveAll() { if (demo) return; store.set("cal", cal); store.set("prog", prog); }
@@ -160,17 +160,18 @@ function liveFor(ch, j) {
 function chip(t, cls) { return el("span", cls, t); }
 
 /* ---------- tabs ---------- */
-var TABS = ["learn", "quiz", "spell", "me"];
-var TIPS = { learn: "Pick a letter and show me your hand!", quiz: "Ready? Ten letters, ten seconds each. You've got this.", spell: "Type your name and let's spell it!", me: "Look how far you've come!" };
+var TABS = ["home", "learn", "quiz", "spell", "me"];
+var TIPS = { home: "Welcome back! Ready for a battle?", learn: "Pick a letter and show me your hand!", quiz: "Three hearts. Sign fast and chain a combo!", spell: "Type your name and let's spell it!", me: "Look how far you've come!" };
 function showTab(name, user) {
   mode = name; TABS.forEach(function (t) { var s = t === name; $("#t-" + t).setAttribute("aria-selected", s ? "true" : "false"); $("#p-" + t).hidden = !s; });
   Array.prototype.forEach.call(document.querySelectorAll(".bb[data-go]"), function (b) { if (b.getAttribute("data-go") === name) b.setAttribute("aria-current", "page"); else b.removeAttribute("aria-current"); });
-  dogSay(TIPS[name]); stopRuns(); if (name === "learn") renderLearn(); if (name === "quiz") renderQuiz(); if (name === "me") { renderProg(); renderTeach(); } if (name === "spell") renderSpellIdle();
+  dogSay(TIPS[name]); stopRuns(); camVis(); if (name === "home") G.renderHome(); if (name === "learn") renderLearn(); if (name === "quiz") renderQuiz(); if (name === "me") { renderProg(); renderTeach(); G.renderMe(); } if (name === "spell") renderSpellIdle();
   if (user) { try { window.scrollTo({ top: 0 }); } catch (e) {} }
 }
 TABS.forEach(function (t) { $("#t-" + t).addEventListener("click", function () { showTab(t, true); }); });
 Array.prototype.forEach.call(document.querySelectorAll(".bb[data-go]"), function (b) { b.addEventListener("click", function () { showTab(b.getAttribute("data-go"), true); }); });
-function stopRuns() { setPrompt(null); setHold(0); learn.holder.reset(); quiz.state = "idle"; spell.state = "idle"; }
+function camVis() { var s = mode === "learn" || mode === "quiz" || mode === "spell" || (mode === "me" && $("#teach-fold").open); $("#camcard").hidden = !s; }
+function stopRuns() { G.hold(false); setPrompt(null); setHold(0); learn.holder.reset(); quiz.state = "idle"; spell.state = "idle"; }
 
 /* ---------- finger chart (side view of each finger, drawn from the numbers) ---------- */
 function fingerChart(proto) {
@@ -223,69 +224,80 @@ function tickLearn(c, now) {
 }
 function learnSuccess() {
   if (learn.done) return;
-  learn.done = true; prog.learned[learn.ch] = 1; saveAll(); beep(true); flash("Got it!");
+  learn.done = true; var firstTime = !prog.learned[learn.ch]; prog.learned[learn.ch] = 1; beep(true); flash("Got it!"); G.signed(prog, firstTime ? 20 : 5);
   var i = LETTERS.indexOf(learn.ch); setTimeout(function () { if (mode === "learn" && learn.done) { learn.ch = LETTERS[(i + 1) % LETTERS.length]; learn.done = false; learn.holder.reset(); renderLearn(); } }, 1100);
 }
 
-/* ---------- QUIZ ---------- */
-var quiz = { state: "idle", list: [], i: 0, t0: 0, holder: new Holder(), res: [], pool: "all", seen: {} };
-var QN = 10, QTIME = 10000;
+/* ---------- BATTLE ---------- */
+var quiz = { state: "idle", list: [], i: 0, t0: 0, holder: new Holder(), res: [], pool: "all", seen: {}, hearts: 3, combo: 0, best: 0, score: 0, out: null };
+var QN = 15, QTIME = 8000, WIN_AT = 8;
+function qLimit() { return Math.max(5000, QTIME - quiz.combo * 250); }
 function pickPool() {
   var base = LETTERS.filter(function (c) { return !L.MOTION[c]; });
   if (quiz.pool === "learned") { var l = base.filter(function (c) { return prog.learned[c]; }); if (l.length >= 3) base = l; }
   var a = base.slice(), out = []; while (out.length < QN && a.length) { out.push(a.splice(Math.floor(Math.random() * a.length), 1)[0]); }
   while (out.length < QN) out.push(base[Math.floor(Math.random() * base.length)]); return out;
 }
+function mult() { return Math.min(5, 1 + Math.floor(quiz.combo / 3)); }
 function renderQuiz() {
   var c = $("#q-card"); clear(c);
   if (quiz.state === "run") {
-    c.appendChild(el("h2", null, "Quiz")); var pr = el("p", "big-n", (quiz.i + 1) + " of " + QN); pr.id = "q-prog"; c.appendChild(pr);
-    c.appendChild(el("p", "muted", "Sign the letter on the camera. You have 10 seconds for each one."));
-    var r = el("div", "row"), sk = el("button", "btn sm ghost", "Skip this one"); sk.type = "button"; sk.addEventListener("click", function () { finishQ(false); });
-    var qt = el("button", "btn sm ghost", "Stop quiz"); qt.type = "button"; qt.addEventListener("click", function () { quiz.state = "idle"; setPrompt(null); setHold(0); renderQuiz(); });
+    var top = el("div", "row"); top.style.justifyContent = "space-between"; top.appendChild(el("h2", null, "Battle"));
+    var hr = el("div", "hearts"); hr.innerHTML = G.hearts(quiz.hearts, 3); hr.setAttribute("aria-label", quiz.hearts + " hearts left"); top.appendChild(hr); c.appendChild(top);
+    var pr = el("p", "big-n", (quiz.i + 1) + " of " + QN); pr.id = "q-prog"; c.appendChild(pr);
+    var hud = el("div", "row"); hud.appendChild(el("span", "tag" + (mult() > 1 ? " good" : ""), "Combo x" + mult())); hud.appendChild(el("span", "tag", "Score " + quiz.score)); c.appendChild(hud);
+    c.appendChild(el("p", "muted", "Sign the letter fast. Wrong or too slow costs a heart."));
+    var r = el("div", "row"), sk = el("button", "btn sm ghost", "Skip (lose a heart)"); sk.type = "button"; sk.addEventListener("click", function () { finishQ(false); });
+    var qt = el("button", "btn sm ghost", "Quit"); qt.type = "button"; qt.addEventListener("click", function () { quiz.state = "idle"; G.hold(false); setPrompt(null); setHold(0); renderQuiz(); });
     r.appendChild(sk); r.appendChild(qt); c.appendChild(r); return;
   }
   if (quiz.state === "done") {
-    var right = quiz.res.filter(function (x) { return x.ok; }).length;
-    c.appendChild(el("h2", null, "Quiz done")); c.appendChild(el("p", "big-n", right + " of " + quiz.res.length));
-    var first = firstQuiz(), msg = "";
-    if (first && prog.results.filter(function (r) { return r.mode === "quiz"; }).length > 1) msg = "Your first quiz was " + first.right + " of " + first.total + ". Today you got " + right + ".";
-    if (msg) c.appendChild(el("p", "muted", msg));
+    var right = quiz.res.filter(function (x) { return x.ok; }).length, o = quiz.out || { win: false, delta: 0 };
+    c.appendChild(el("h2", null, o.win ? "Victory!" : "Battle over")); c.appendChild(el("p", "big-n", right + " cleared"));
+    var tr = html2("div", "pill big", G.ICON.trophy); tr.appendChild(el("span", null, (o.delta > 0 ? "+" : "") + o.delta)); c.appendChild(tr);
+    c.appendChild(el("p", "muted", "Score " + quiz.score + ". Best combo x" + Math.min(5, 1 + Math.floor(quiz.best / 3)) + ". " + (o.win ? "You cleared 8 or more, so you win trophies." : "Clear 8 letters to win trophies.")));
     var miss = quiz.res.filter(function (x) { return !x.ok; });
     if (miss.length) { c.appendChild(el("h4", null, "Practice these")); var w = el("div", "word"); miss.forEach(function (x) { w.appendChild(el("span", null, x.ch)); }); c.appendChild(w); }
-    var b = el("div", "row"), again = el("button", "btn", "Quiz again"); again.type = "button"; again.addEventListener("click", startQuiz);
+    var b = el("div", "row"), again = el("button", "btn", "Battle again"); again.type = "button"; again.addEventListener("click", startQuiz);
     var pg = el("button", "btn ghost", "See my progress"); pg.type = "button"; pg.addEventListener("click", function () { showTab("me", true); }); b.appendChild(again); b.appendChild(pg); c.appendChild(b); return;
   }
-  c.appendChild(el("h2", null, "Quiz")); c.appendChild(el("p", "muted", "10 random letters. Take it before you practice and again after, and you'll see how much you've improved."));
+  var inf = G.info();
+  c.appendChild(el("h2", null, "Battle")); c.appendChild(el("p", "kick", inf.arena + " - " + inf.trophies + " trophies"));
+  c.appendChild(el("p", "muted", "Up to 15 letters. You have 3 hearts. Clear 8 or more to win trophies. Chain right answers for a combo and a bigger score."));
   var row = el("div", "row"); [["all", "Any letter"], ["learned", "Only letters I've learned"]].forEach(function (o) {
     var b2 = el("button", "btn sm " + (quiz.pool === o[0] ? "alt" : "ghost"), o[1]); b2.type = "button"; b2.setAttribute("aria-pressed", quiz.pool === o[0] ? "true" : "false"); b2.addEventListener("click", function () { quiz.pool = o[0]; renderQuiz(); }); row.appendChild(b2);
   }); c.appendChild(row);
-  var go = el("button", "btn", "Start quiz"); go.type = "button"; go.id = "q-go"; go.addEventListener("click", startQuiz); c.appendChild(go);
+  var go = el("button", "btn big", "Start battle"); go.type = "button"; go.id = "q-go"; go.addEventListener("click", startQuiz); c.appendChild(go);
   c.appendChild(el("p", "status", running ? "" : "Turn the camera on first."));
 }
-function firstQuiz() { var q = prog.results.filter(function (r) { return r.mode === "quiz"; })[0]; return q ? { right: q.right, total: q.total } : null; }
+function html2(tag, cls, h) { var n = el(tag, cls); n.innerHTML = h; return n; }
 function startQuiz() {
   if (!running) { $("#q-card").appendChild(el("div", "notice", "Start the camera first, at the top of the page.")); return; }
-  quiz.list = pickPool(); quiz.i = 0; quiz.res = []; quiz.state = "run"; nextQ(); renderQuiz();
+  quiz.list = pickPool(); quiz.i = 0; quiz.res = []; quiz.hearts = 3; quiz.combo = 0; quiz.best = 0; quiz.score = 0; quiz.out = null; quiz.state = "run"; G.hold(true); nextQ(); renderQuiz();
 }
 function nextQ() { quiz.holder.reset(); quiz.t0 = performance.now(); quiz.seen = {}; setPrompt(quiz.list[quiz.i]); setHold(0); }
 function finishQ(ok) {
+  if (quiz.state !== "run") return;
   var ch = quiz.list[quiz.i], saw = null, best = 0; Object.keys(quiz.seen).forEach(function (k) { if (quiz.seen[k] > best) { best = quiz.seen[k]; saw = k; } });
-  quiz.res.push({ ch: ch, ok: ok, saw: ok ? null : saw }); if (ok) { beep(true); flash("Yes!"); } else beep(false);
-  quiz.i++; if (quiz.i >= QN) { endQuiz(); return; } nextQ(); var p = $("#q-prog"); if (p) p.textContent = (quiz.i + 1) + " of " + QN;
+  quiz.res.push({ ch: ch, ok: ok, saw: ok ? null : saw });
+  if (ok) { quiz.combo++; if (quiz.combo > quiz.best) quiz.best = quiz.combo; var m = mult(); quiz.score += 100 * m; beep(true); flash(m > 1 ? "Combo x" + m + "!" : "Yes!"); G.signed(prog, 10 * m); }
+  else { quiz.combo = 0; quiz.hearts--; beep(false); dogSay("Ouch! Shake it off.", true); }
+  quiz.i++; if (quiz.hearts <= 0 || quiz.i >= QN) { endQuiz(); return; }
+  nextQ(); renderQuiz();
 }
 function endQuiz() {
   quiz.state = "done"; setPrompt(null); setHold(0); var right = quiz.res.filter(function (x) { return x.ok; }).length;
   prog.results.push({ ts: Date.now(), mode: "quiz", total: quiz.res.length, right: right, per: quiz.res.map(function (x) { return { ch: x.ch, ok: x.ok ? 1 : 0, saw: x.saw || "" }; }) });
-  prog.results = prog.results.slice(-200); saveAll(); renderQuiz();
+  prog.results = prog.results.slice(-200); G.bestCombo(prog, quiz.best);
+  quiz.out = G.battleEnd(prog, right); G.hold(false); G.check(); saveAll(); renderQuiz();
 }
 function tickQuiz(c, now) {
   if (quiz.state !== "run") { draw(c && c.lm); return; }
   var ch = quiz.list[quiz.i], j = judge(ch, c); draw(c && c.lm, null);
   if (c) { var b = c.cls.best.ch; quiz.seen[b] = (quiz.seen[b] || 0) + 1; }
   var p = quiz.holder.update(j.ok, now); setHold(p);
-  var left = Math.max(0, Math.ceil((QTIME - (now - quiz.t0)) / 1000)); setLive([chip(left + " seconds left", "hint")]);
-  if (p >= 1) finishQ(true); else if (now - quiz.t0 > QTIME) finishQ(false);
+  var left = Math.max(0, Math.ceil((qLimit() - (now - quiz.t0)) / 1000)); setLive([chip(left + " seconds left", "hint")]);
+  if (p >= 1) finishQ(true); else if (now - quiz.t0 > qLimit()) finishQ(false);
 }
 
 /* ---------- SPELL ---------- */
@@ -309,7 +321,7 @@ function renderSpellMsg(t) { var c = $("#s-run"); clear(c); c.hidden = false; c.
 function advanceSpell() {
   spell.i++; spell.holder.reset();
   if (spell.i >= spell.word.length) { spell.state = "done"; setPrompt(null); setHold(0); var ok = spell.marks.filter(function (m) { return m === "ok"; }).length;
-    prog.results.push({ ts: Date.now(), mode: "spell", word: spell.word, right: ok, total: spell.word.length, ms: Math.round(performance.now() - spell.t0) }); prog.results = prog.results.slice(-200); saveAll(); flash("Done!"); }
+    prog.results.push({ ts: Date.now(), mode: "spell", word: spell.word, right: ok, total: spell.word.length, ms: Math.round(performance.now() - spell.t0) }); prog.results = prog.results.slice(-200); if (ok === spell.word.length) prog.words = (prog.words || 0) + 1; G.check(); flash("Done!"); }
   else setPrompt(spell.word[spell.i], L.MOTION[spell.word[spell.i]] ? "start shape" : null);
   renderSpell();
 }
@@ -320,7 +332,7 @@ $("#s-word").addEventListener("keydown", function (e) { if (e.key === "Enter") $
 function tickSpell(c, now) {
   if (spell.state !== "run") { draw(c && c.lm); return; }
   var ch = spell.word[spell.i], j = judge(ch, c); draw(c && c.lm, j.off); var p = spell.holder.update(j.ok, now); setHold(p); liveFor(ch, j);
-  if (p >= 1) { spell.marks[spell.i] = "ok"; beep(true); advanceSpell(); }
+  if (p >= 1) { spell.marks[spell.i] = "ok"; beep(true); G.signed(prog, 5); advanceSpell(); }
 }
 
 /* ---------- TEACH ---------- */
@@ -346,7 +358,7 @@ function record() {
   if (teach.recording) return; teach.recording = true; var n = 0, ch = teach.ch, btn = $("#t-rec"); btn.disabled = true; st.textContent = "Recording. Hold still...";
   var iv = setInterval(function () {
     if (cur) { addSample(ch, cur.feat); n++; }
-    if (n >= SAMPLES || (!cur && n === 0 && (iv._tries = (iv._tries || 0) + 1) > 20)) { clearInterval(iv); teach.recording = false; if (mode === "teach") { renderTeach(); $("#t-status").textContent = n ? "Saved " + n + " examples. " + ch + " now has " + cal[ch].length + "." : "I lost your hand. Try again."; beep(!!n); } }
+    if (n >= SAMPLES || (!cur && n === 0 && (iv._tries = (iv._tries || 0) + 1) > 20)) { clearInterval(iv); teach.recording = false; if (mode === "me") { G.check(); renderTeach(); $("#t-status").textContent = n ? "Saved " + n + " examples. " + ch + " now has " + cal[ch].length + "." : "I lost your hand. Try again."; beep(!!n); } }
   }, 90);
 }
 function tickTeach(c) { draw(c && c.lm); if (running && !teach.recording) { if (!c) setLive(["Hold up one hand so I can see it."]); else setLive([chip(c.cls.best.d <= L.ACCEPT ? "I think this is " + c.cls.best.ch : "I'm not sure what this is", "hint")]); } }
@@ -382,13 +394,13 @@ function renderProg() {
   var r = el("div", "row"), cp = el("button", "btn sm", "Copy my results"); cp.type = "button"; var st = el("span", "status"); st.setAttribute("role", "status");
   cp.addEventListener("click", function () { var tx = resultsText(); (navigator.clipboard && navigator.clipboard.writeText ? navigator.clipboard.writeText(tx) : Promise.reject()).then(function () { st.textContent = "Copied."; }).catch(function () { st.textContent = "Couldn't copy. Select this text instead: " + tx.replace(/\n/g, " | "); }); });
   var er = el("button", "btn sm ghost", "Erase everything"), armed = false; er.type = "button";
-  er.addEventListener("click", function () { if (!armed) { armed = true; er.textContent = "Sure?"; setTimeout(function () { armed = false; er.textContent = "Erase everything"; }, 3000); return; } cal = {}; prog = { learned: {}, results: [] }; saveAll(); renderProg(); });
+  er.addEventListener("click", function () { if (!armed) { armed = true; er.textContent = "Sure?"; setTimeout(function () { armed = false; er.textContent = "Erase everything"; }, 3000); return; } cal = {}; prog = G.loadProg({}, {}, []); saveAll(); renderProg(); G.refresh(); });
   r.appendChild(cp); r.appendChild(er); r.appendChild(st); c.appendChild(r); c.appendChild(el("p", "small muted", "Everything is saved only on this device."));
 }
 
 /* ---------- frame router ---------- */
 function tick(c, now) {
-  if (!c && running) { if (mode === "learn" || mode === "spell") { draw(null); learn.holder.update(false, now); spell.holder.update(false, now); if (mode === "learn" || spell.state === "run") setLive(["Hold up one hand so I can see it."]); setHold(0); } else draw(null); if (mode === "quiz" && quiz.state === "run") { var p = quiz.holder.update(false, now); setHold(p); if (now - quiz.t0 > QTIME) finishQ(false); } return; }
+  if (!c && running) { if (mode === "learn" || mode === "spell") { draw(null); learn.holder.update(false, now); spell.holder.update(false, now); if (mode === "learn" || spell.state === "run") setLive(["Hold up one hand so I can see it."]); setHold(0); } else draw(null); if (mode === "quiz" && quiz.state === "run") { var p = quiz.holder.update(false, now); setHold(p); if (now - quiz.t0 > qLimit()) finishQ(false); } return; }
   if (mode === "learn") tickLearn(c, now); else if (mode === "quiz") tickQuiz(c, now); else if (mode === "spell") tickSpell(c, now); else if (mode === "me") tickTeach(c); else draw(c && c.lm);
 }
 
@@ -415,6 +427,7 @@ window.addEventListener("pagehide", function () { if (stream) stopCamera(); });
 if ("serviceWorker" in navigator && /^https?:$/.test(location.protocol)) navigator.serviceWorker.register("sw.js").catch(function () {});
 window.__hs = { get state() { return { mode: mode, learned: prog.learned, cal: Object.keys(cal).map(function (k) { return k + ":" + cal[k].length; }), results: prog.results, quiz: quiz.state, qtarget: quiz.list[quiz.i], learnch: learn.ch, spell: spell.state, running: running }; }, setRunning: function (v) { running = v; }, setPaused: function (v) { paused = v; } };
 try { if (window.navigator.standalone || (window.matchMedia && matchMedia("(display-mode: standalone)").matches)) $("#ios-tip").hidden = true; } catch (e) {}
-$("#teach-fold").addEventListener("toggle", function () { if (mode === "me") renderTeach(); });
-showTab("learn");
+$("#teach-fold").addEventListener("toggle", function () { camVis(); if (mode === "me") renderTeach(); });
+G.setup({ getProg: function () { return prog; }, save: saveAll, go: function (t) { showTab(t, true); }, taught: function () { return Object.keys(cal).length; }, letters: function () { return LETTERS; }, setLearn: function (ch) { learn.ch = ch; learn.done = false; learn.holder.reset(); } });
+showTab("home");
 })();
