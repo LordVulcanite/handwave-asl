@@ -28,7 +28,7 @@
 @media (prefers-color-scheme: dark){:root{
   --bg:#142419; --surface:#1E3023; --tint:#182A1D; --ink:#E8F3E9; --ink-2:#A8C2AD; --line:#33503A; --field:#42634A;
   --accent:#EA8A6E; --accent-ink:#1A0F0B; --accent-soft:#4B2B22; --good:#9BE3B2; --good-bg:#17402B; --warn-bg:#3F340D; --err-bg:#401C19; color-scheme:dark;}}
-html{-webkit-text-size-adjust:100%; background:var(--bg)}
+html{-webkit-text-size-adjust:100%; background:var(--bg); overscroll-behavior-y:none}
 *{box-sizing:border-box; -webkit-tap-highlight-color:transparent}
 [hidden]{display:none !important}
 button,.lt,.tab,.bb{touch-action:manipulation; -webkit-user-select:none; user-select:none}
@@ -110,15 +110,16 @@ details.fold[open]>summary{margin-bottom:10px}
   body{padding-bottom:calc(96px + env(safe-area-inset-bottom,0px))}
   .tabs{display:none}
   .camcard{position:sticky; top:calc(6px + env(safe-area-inset-top,0px)); z-index:10; padding:10px 12px; gap:6px}
-  .stage{max-width:240px} .live{min-height:2.4em}
+  .stage{max-width:210px} .live{min-height:2.2em; font-size:.95rem}
   .stage .prompt{font-size:2.2rem; padding:0 10px 2px; min-width:48px; border-radius:14px}
   .stage .big{gap:8px; padding:8px} .stage .big p{font-size:.95rem}
-  .stage .big p.small{display:none} .stage .big .btn{min-height:40px; padding:4px 16px}
+  .stage .big p{display:none} .stage .big .btn{min-height:44px; padding:4px 16px}
   .bottombar{display:flex; position:fixed; left:0; right:0; bottom:0; z-index:20; background:var(--accent); border-radius:20px 20px 0 0; padding:6px 6px calc(6px + env(safe-area-inset-bottom,0px)); gap:2px}
   .bb{flex:1; min-width:0; min-height:54px; border:none; background:none; border-radius:14px; font:800 .8rem var(--body); color:var(--accent-ink); opacity:.88; cursor:pointer}
   .bb[aria-current="page"]{opacity:1; background:rgba(255,255,255,.26)}
+  .btn.sm{min-height:44px}
 }
-@media (min-width:410px) and (max-width:700px){ .stage{max-width:300px} header.top .dogwrap{width:92px} }
+@media (min-width:410px) and (max-width:700px){ .stage{max-width:250px} header.top .dogwrap{width:92px} }
 @media (max-height:520px) and (orientation:landscape){ .camcard{position:static} body{padding-bottom:calc(70px + env(safe-area-inset-bottom,0px))} .bb{min-height:44px} }
 @media (prefers-reduced-motion: reduce){.btn,.stage .flash,.stage .hold i{transition:none} .dog .tail,.dog .wave,.dog .eye,.dog.hop{animation:none}}
 
@@ -166,7 +167,7 @@ h1::after{content:""; position:absolute; left:2px; right:0; bottom:-6px; height:
       <div class="big" id="camintro">
         <p><b>Hi! Hold one hand up and let's go.</b></p>
         <button class="btn alt" id="cam-start" type="button">Start camera</button>
-        <button class="btn sm ghost" id="demo-start" type="button">No camera? Try the demo</button>
+        <button class="btn sm ghost" id="demo-start" type="button">Try the demo</button>
       </div>
     </div>
     <div class="live" id="live" role="status" aria-live="polite"><span class="muted">Camera is off.</span></div>
