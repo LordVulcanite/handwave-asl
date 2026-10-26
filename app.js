@@ -32,7 +32,7 @@ function saveAll() { if (demo) return; store.set("cal", cal); store.set("prog", 
 
 /* ---------- camera + hand tracking ---------- */
 var video = $("#cam"), cvs = $("#ov"), ctx = cvs.getContext("2d");
-var hands = null, running = false, stream = null, busyFrame = false, paused = false;
+var hands = null, running = false, stream = null, busyFrame = false, paused = false, facing = "user";
 var ring = [], cur = null, lastSeen = 0, vw = 640, vh = 480, mode = "learn";
 function setLive(nodes) { var b = $("#live"); clear(b); nodes.forEach(function (n) { b.appendChild(typeof n === "string" ? el("span", "muted", n) : n); }); }
 function camError(e) {
@@ -48,10 +48,10 @@ async function startCamera() {
   try { var AC = window.AudioContext || window.webkitAudioContext; if (AC) { beep.a = beep.a || new AC(); if (beep.a.resume) beep.a.resume(); } } catch (e) {}
   try {
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw { name: "SecurityError" };
-    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } }, audio: false });
+    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: facing }, width: { ideal: 640 }, height: { ideal: 480 } }, audio: false });
   } catch (e) { $("#cam-start").disabled = false; camError(e); return; }
   video.srcObject = stream; try { await video.play(); } catch (e) {}
-  $("#camintro").hidden = true; $("#cam-stop").hidden = false; setLive(["Loading the hand tracker. The first time takes a few seconds."]);
+  $("#camintro").hidden = true; $("#cam-stop").hidden = false; $("#cam-flip").hidden = false; setLive(["Loading the hand tracker. The first time takes a few seconds."]);
   try {
     if (!window.Hands) throw new Error("tracker missing");
     if (!hands) {
@@ -65,8 +65,18 @@ async function startCamera() {
 }
 function stopCamera() {
   running = false; if (stream) { stream.getTracks().forEach(function (t) { t.stop(); }); stream = null; }
-  video.srcObject = null; ctx.clearRect(0, 0, cvs.width, cvs.height); $("#cam-stop").hidden = true; $("#camintro").hidden = false; cur = null; ring = [];
+  video.srcObject = null; ctx.clearRect(0, 0, cvs.width, cvs.height); $("#cam-stop").hidden = true; $("#cam-flip").hidden = true; $("#camintro").hidden = false; cur = null; ring = [];
   setLive(["Camera is off."]); dogSay("Folding my feathers. Turn the camera on when you're ready."); stopRuns();
+}
+async function flipCamera() {
+  if (!running || demo || !stream) return;
+  var btn = $("#cam-flip"), next = facing === "user" ? "environment" : "user"; btn.disabled = true; paused = true;
+  try {
+    var ns = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: next }, width: { ideal: 640 }, height: { ideal: 480 } }, audio: false });
+    stream.getTracks().forEach(function (t) { t.stop(); }); stream = ns; facing = next; video.srcObject = ns; try { await video.play(); } catch (e) {}
+    $("#stage").classList.toggle("rear", facing === "environment"); ring = []; cur = null;
+  } catch (e) { setLive([chip("I couldn't switch cameras on this device.", "hint")]); }
+  paused = false; btn.disabled = false;
 }
 async function loop() {
   if (!running) return;
@@ -398,6 +408,7 @@ $("#demo-start").addEventListener("click", startDemo);
 if (window.__demoOnly) { $("#cam-start").hidden = true; var ip = $("#camintro").querySelector("p"); ip.textContent = "This preview has no camera. Try the demo to see how Handwave works."; $("#camintro").querySelectorAll("p")[1].hidden = true; }
 $("#demo-sign").addEventListener("click", demoSign);
 $("#cam-start").addEventListener("click", startCamera);
+$("#cam-flip").addEventListener("click", flipCamera);
 $("#cam-stop").addEventListener("click", function () { if (demo) { location.reload(); return; } stopCamera(); });
 document.addEventListener("visibilitychange", function () { if (document.hidden && running && !demo) stopCamera(); });
 window.addEventListener("pagehide", function () { if (stream) stopCamera(); });
